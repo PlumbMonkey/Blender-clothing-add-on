@@ -56,3 +56,37 @@ def ensure_geo_modifier(obj, modifier_name, rebuild_fn=None):
         rebuild_fn(mod)
 
     return mod
+
+
+# --- modifier inputs (from Wisp core/hair_stack.py) ------------------------
+
+def socket_id(node_group, socket_name):
+    for item in node_group.interface.items_tree:
+        if item.item_type == 'SOCKET' and item.in_out == 'INPUT' and item.name == socket_name:
+            return item.identifier
+    raise KeyError(f"{node_group.name}: no input '{socket_name}'")
+
+
+def _typed_input(mod, sid):
+    """5.2+: inputs are RNA structs under ``mod.properties.inputs``;
+    5.1 and older: plain ID properties on the modifier (returns None)."""
+    props = getattr(mod, "properties", None)
+    if props is None:
+        return None
+    return getattr(props.inputs, sid, None)
+
+
+def set_input(mod, socket_name, value):
+    """Set a NODES modifier input by its display name."""
+    sid = socket_id(mod.node_group, socket_name)
+    typed = _typed_input(mod, sid)
+    if typed is not None:
+        typed.value = value
+    else:
+        mod[sid] = value
+
+
+def get_input(mod, socket_name):
+    sid = socket_id(mod.node_group, socket_name)
+    typed = _typed_input(mod, sid)
+    return typed.value if typed is not None else mod[sid]

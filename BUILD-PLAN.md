@@ -26,14 +26,20 @@
 - **Found:** VRoid exports bake the outfit into `Body` (Wei Li's T-shirt/shorts/shoes are body geometry, with `J_Sec_*Tops*` physics bones). Regions still split correctly, but Drape garments would sit over the baked clothes. Need a nude VRoid export (or a "strip baked outfit" step) before Phase 2 testing on VRoid
 - **Noted:** Wei Li's hips edge is jagged along the baked shirt hem — fine as an auto-guess; Phase 2 smooths coverage borders anyway
 
-## Phase 2 — Garment Generation MVP  → *first shippable*
+## Phase 2 — Garment Generation MVP  → *first shippable* ✅ *core done 2026-10-14 (v0.3.0)*
 The core trick: paint coverage → get a garment. Non-destructive throughout.
 
-- [ ] Paint garment coverage on body (mask) → GN generates an offset shell: solidify, smooth borders, adjustable offset/thickness
-- [ ] Boundary curves auto-extracted from mask edges → editable necklines, sleeve ends, hems
-- [ ] Garment presets from coverage templates: t-shirt, tank, shorts, pants, skirt, socks
-- [ ] Toon + simple PBR fabric materials (one click)
-- [ ] **Done when:** a t-shirt and shorts on a VRoid model in ~10 minutes, and editing the mask updates the garment live
+- [x] Paint garment coverage on body (mask) → GN generates an offset shell (`core/garment.py`, group "Drape Garment Shell", v11). The garment is its own object at the world origin reading the **evaluated** body (posed) in world metres, so it follows animation and updates live while the coverage is painted. Pipeline: body mesh only → weld seams → soften coverage → keep a band → subdivide → **true iso-cut** (points where coverage crosses 0.5 on each edge; uncovered verts snap to them; snapped duplicates merged) → smooth the edge as a line → **Looseness** (surface relax, faded to 0 within 4 cm of the edges) → collide (push out to ≥ Offset) → Solidify (Thickness, outward, no even-offset, clamped)
+- [x] Coverage is **geometric**, not per-vertex 0/1 (`core/coverage.py`): a 0..1 value fading over 3 cm across the real cut (a plane along the limb bone, a hem height), so cuts are straight whatever the mesh's triangles look like
+- [x] Garment templates: T-Shirt, Tank Top, Long Sleeve, Shorts, Pants, Socks. Lengths along bones (sleeve 0..2 = shoulder→elbow→wrist, leg 0..2 = hip→knee→ankle, sock height), hem down the hips region, rise up the torso. Per-template fit + colour defaults
+- [x] Toon + simple PBR fabric materials (`core/fabric.py`), switchable live; Toon = Shader to RGB two-tone (EEVEE only)
+- [x] Panel: template → Add; per garment Shape sliders (rewrite coverage live), Paint Coverage / Finish / Reset to Template, Fit (Offset, Looseness, Thickness, Edge Smoothing, Resolution), Look (Fabric/Toon, colour). Older shell groups auto-upgrade on load (values carried by name)
+- [x] **Done when** verified live in Blender 5.2: T-shirt + shorts on the nude VRoid (Body.001) and on Nova (CC) in **two clicks each, ~0.6 s**; painting a forearm into the shirt's coverage grew the sleeve immediately (13 356 → 16 178 verts); raising the arm 40° carried the garment. Tank/Long Sleeve/Pants/Socks generate on both bodies (checked numerically, not by eye)
+- [ ] Boundary curves as editable objects (necklines, hems) — the shell already has clean edges from the iso-cut; editable curves move to Phase 4 with seams/hems trim
+- [ ] Skirt — a body-following shell can't make one (it would split between the legs); it needs a cone/tube built from the waist and Phase 3 cloth sim
+- [ ] Panel checked by code against a stand-in layout, not clicked in the live UI
+- **Hard-won (VRoid):** (1) bodies duplicate every UV/material seam vertex → weld first or seams open as holes and fake hems; (2) long thin thigh triangles → 0/1 coverage cuts as teeth, hence geometric coverage + iso-cut; (3) the VRM add-on's **MToon Outline** modifier makes the evaluated body carry an outline *instance* → take only the mesh component, or it rides through as a floating copy; (4) Looseness on an open tube curls the end inward → fade it near edges; (5) Solidify even-offset spikes at tight folds and on zero-area faces
+- **Hard-won (GN):** Blur Attribute's Weight doesn't restrict averaging to weighted neighbours, so border-only smoothing on a mesh doesn't work — smooth the border as curves instead
 
 ## Phase 3 — Fit & Simulation
 - [ ] Collision/shrinkwrap fit pass with adjustable tightness (skin-tight ↔ loose)

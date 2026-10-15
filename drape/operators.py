@@ -10,6 +10,12 @@ from .core.body_regions import (
     PREVIEW_ATTR,
     REGION_ATTR,
 )
+from .core.coverage import (
+    TEMPLATES, TEMPLATE_DEFAULTS, TEMPLATE_FIT, CoverageParams,
+    coverage_group_name, compute_coverage, write_coverage,
+)
+from .core.garment import create_garment
+from .core.fabric import make_fabric
 
 PIPELINE_LABELS = {'CC': "Character Creator", 'VROID': "VRoid", 'GENERIC': "Generic"}
 
@@ -134,9 +140,148 @@ class DRAPE_OT_finish_painting(bpy.types.Operator):
         return {'FINISHED'}
 
 
+# --- garments (Phase 2) -------------------------------------------------------
+
+def active_garment(context):
+    """The garment the panel is about: the one being painted, else the active object."""
+    s = context.scene.drape
+    if s.painting_garment is not None and s.painting_garment.drape_garment.is_garment:
+        return s.painting_garment
+    obj = context.active_object
+    if obj is not None and obj.drape_garment.is_garment:
+        return obj
+    return None
+
+
+def _unique_name(body, template):
+    base = f"Drape_{TEMPLATES[template].replace(' ', '').replace('-', '')}_{body.name}"
+    name, i = base, 1
+    while name in bpy.data.objects or body.vertex_groups.get(coverage_group_name(name)):
+        name = f"{base}.{i:03d}"
+        i += 1
+    return name
+
+
+def _select_only(context, obj):
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.hide_set(False)
+    obj.select_set(True)
+    context.view_layer.objects.active = obj
+
+
+class DRAPE_OT_add_garment(bpy.types.Operator):
+    """Add a garment of the chosen kind to the body. It is generated from a
+    coverage map on the body, follows the body's animation, and every slider
+    updates it live"""
+    bl_idname = "drape.add_garment"
+    bl_label = "Add Garment"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        s = context.scene.drape
+        return s.target is not None and REGION_ATTR in s.target.data.attributes
+
+    def execute(self, context):
+        s = context.scene.drape
+        if context.active_object and context.active_object.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        body, arm, template = s.target, _armature(s), s.new_template
+        params = CoverageParams(**TEMPLATE_DEFAULTS[template])
+        fit = TEMPLATE_FIT[template]
+
+        name = _unique_name(body, template)
+        group = coverage_group_name(name)
+        n = write_coverage(body, group, compute_coverage(body, arm, template, params))
+        if n == 0:
+            self.report({'ERROR'}, "This garment covers nothing on this body")
+            return {'CANCELLED'}
+
+        collection = body.users_collection[0] if body.users_collection else context.scene.collection
+        mat = make_fabric(name, fit['color'])
+        obj = create_garment(body, name, group, mat, collection,
+                             offset=fit['offset'], thickness=fit['thickness'],
+                             looseness=fit['looseness'])
+
+        g = obj.drape_garment  # is_garment stays False until filled: no update storms
+        g.body = body
+        g.armature_name = arm.name if arm else ""
+        g.template = template
+        g.coverage_group = group
+        for k, v in vars(params).items():
+            setattr(g, k, v)
+        g.offset, g.thickness, g.looseness = fit['offset'], fit['thickness'], fit['looseness']
+        g.color = fit['color']
+        g.is_garment = True
+
+        _select_only(context, obj)
+        self.report({'INFO'}, f"Added {TEMPLATES[template]} ({n} body verts covered)")
+        return {'FINISHED'}
+
+
+class DRAPE_OT_paint_coverage(bpy.types.Operator):
+    """Paint where this garment goes on the body (paint = cover, erase =
+    uncover). The garment updates live while you paint"""
+    bl_idname = "drape.paint_coverage"
+    bl_label = "Paint Coverage"
+
+    @classmethod
+    def poll(cls, context):
+        return active_garment(context) is not None
+
+    def execute(self, context):
+        garment = active_garment(context)
+        g = garment.drape_garment
+        if context.active_object and context.active_object.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        context.scene.drape.painting_garment = garment
+        _select_only(context, g.body)
+        g.body.vertex_groups.active = g.body.vertex_groups[g.coverage_group]
+        bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
+        self.report({'INFO'}, f"Painting {garment.name}. Click Finish Painting when done")
+        return {'FINISHED'}
+
+
+class DRAPE_OT_finish_coverage(bpy.types.Operator):
+    """Stop painting and select the garment again"""
+    bl_idname = "drape.finish_coverage"
+    bl_label = "Finish Painting"
+
+    def execute(self, context):
+        s = context.scene.drape
+        garment = s.painting_garment
+        if context.active_object and context.active_object.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        s.painting_garment = None
+        if garment is not None:
+            _select_only(context, garment)
+        return {'FINISHED'}
+
+
+class DRAPE_OT_reset_coverage(bpy.types.Operator):
+    """Throw away painted changes and rebuild the coverage from the
+    garment's template and lengths"""
+    bl_idname = "drape.reset_coverage"
+    bl_label = "Reset to Template"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return active_garment(context) is not None
+
+    def execute(self, context):
+        from .properties import rebuild_coverage
+        rebuild_coverage(active_garment(context).drape_garment)
+        return {'FINISHED'}
+
+
 CLASSES = (
     DRAPE_OT_setup_body,
     DRAPE_OT_show_regions,
     DRAPE_OT_paint_region,
     DRAPE_OT_finish_painting,
+    DRAPE_OT_add_garment,
+    DRAPE_OT_paint_coverage,
+    DRAPE_OT_finish_coverage,
+    DRAPE_OT_reset_coverage,
 )
