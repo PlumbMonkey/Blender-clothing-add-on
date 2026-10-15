@@ -41,11 +41,17 @@ The core trick: paint coverage → get a garment. Non-destructive throughout.
 - **Hard-won (VRoid):** (1) bodies duplicate every UV/material seam vertex → weld first or seams open as holes and fake hems; (2) long thin thigh triangles → 0/1 coverage cuts as teeth, hence geometric coverage + iso-cut; (3) the VRM add-on's **MToon Outline** modifier makes the evaluated body carry an outline *instance* → take only the mesh component, or it rides through as a floating copy; (4) Looseness on an open tube curls the end inward → fade it near edges; (5) Solidify even-offset spikes at tight folds and on zero-area faces
 - **Hard-won (GN):** Blur Attribute's Weight doesn't restrict averaging to weighted neighbours, so border-only smoothing on a mesh doesn't work — smooth the border as curves instead
 
-## Phase 3 — Fit & Simulation
-- [ ] Collision/shrinkwrap fit pass with adjustable tightness (skin-tight ↔ loose)
-- [ ] Cloth sim presets: drape / settle / windy — pin groups auto-set at waist, shoulders, cuffs
-- [ ] Bake sim result to shape key (keep the procedural base intact)
-- [ ] **Done when:** a loose skirt drapes believably with one click
+## Phase 3 — Fit & Simulation ✅ *core done 2026-10-14 (v0.4.0)*
+- [x] Fit with adjustable tightness: **Fit** dropdown (Skin-tight / Fitted / Relaxed / Loose) sets Offset + Looseness together (`TIGHTNESS_FIT` in `core/coverage.py`); the shell's collide pass already keeps cloth ≥ Offset off the skin. Templates start from a preset
+- [x] **Skirt** (`core/skirt.py`): a real mesh, since a body shell would split between the legs. A-line tube: waist ring fitted to the body (arms/hands/head excluded from the outline — they hang beside the hips in an A-pose), flare per metre of drop, every ring pushed clear of hips/buttocks/thighs and never narrowing, bone-parented to the pelvis (keeps world placement). Sliders: Length (0 hip … 1 knee … 2 ankle), Flare, Waist; changing one rebuilds the mesh and drops a stale drape
+- [x] Cloth sim presets (`core/sim.py`): Drape (cotton, 60 f), Settle (denim, 40 f), Windy (silk, 120 f + a wind field per body, kept while any of that body's garments uses Windy). Pins: skirt top 2 rings; shells get a body pin map (`DRAPE_PIN_<garment>`: shoulders for tops, waistband for bottoms, all for socks) that the shell copies into the garment's `Drape_Pin` group (shell v12 `Pin` input). Body collides through a hidden GN proxy (`Drape_Collider_<body>`, Collision modifier) — the character object is never touched; hidden-by-eye still collides
+- [x] Bake to shape key: **Drape** on a skirt simulates then keeps the last frame as shape key "Drape Settled" (cloth switched off; base mesh intact; still follows the pelvis). Release Drape / Remove Cloth undo it. Shells (no mesh of their own) keep the baked cache instead; **Whole Animation** simulates over the scene range
+- [x] **Done when** verified live: Add → Skirt → **Drape** on Nova (CC) and the VRoid: believable folds, resting on hips and legs without passing through, ~4.6 s for 60 frames; drape kept at frame 1 and follows a 30° hip rotation. Windy and a T-shirt shell sim (61 f, shoulders pinned) also run
+- [ ] Cuffs aren't pinned (they hang); per-garment pin painting not exposed in the UI yet
+- [ ] Shell sims are slow (~13k verts; quality 5, still well over a minute for 60 f on the T-shirt) — consider simulating a low-res proxy and binding the shell to it (Surface Deform) in a later pass
+- [ ] Layering: a skirt's waistband intersects a shirt hem (Phase 4)
+- [ ] Panel checked by code against a stand-in layout, not clicked in the live UI
+- **Hard-won:** an empty made with `bpy.data.objects.new(name, None)` has no force field (`obj.field` is None) — make wind with `bpy.ops.object.effector_add`; `ptcache.bake` needs a `point_cache` context override; Keep Drape marks the cache "outdated" (the shape key changes the mesh), which is expected
 
 ## Phase 4 — Details & Tailoring
 Where garments stop looking like shells. (Reuses Wisp's instance-along-curve tech.)

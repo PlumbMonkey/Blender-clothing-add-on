@@ -5,6 +5,7 @@ import bpy
 from ..constants import PANEL_CATEGORY
 from ..core.body_regions import REGION_ATTR
 from ..core.coverage import TEMPLATE_PARAMS
+from ..core.sim import CLOTH_MODIFIER, DRAPE_KEY
 from ..operators import active_garment
 
 
@@ -69,21 +70,41 @@ class DRAPE_PT_main(bpy.types.Panel):
         box.label(text="Shape")
         for name in TEMPLATE_PARAMS.get(g.template, ()):
             box.prop(g, name, slider=True)
-        painting = context.scene.drape.painting_garment == garment
-        row = box.row(align=True)
-        if painting:
-            row.operator("drape.finish_coverage", icon='CHECKMARK')
-        else:
-            row.operator("drape.paint_coverage", icon='BRUSH_DATA')
-        row.operator("drape.reset_coverage", text="", icon='LOOP_BACK')
+        skirt = g.template == 'SKIRT'
+        if not skirt:
+            painting = context.scene.drape.painting_garment == garment
+            row = box.row(align=True)
+            if painting:
+                row.operator("drape.finish_coverage", icon='CHECKMARK')
+            else:
+                row.operator("drape.paint_coverage", icon='BRUSH_DATA')
+            row.operator("drape.reset_coverage", text="", icon='LOOP_BACK')
 
         box = col.box().column()
         box.label(text="Fit")
-        box.prop(g, "offset")
-        box.prop(g, "looseness", slider=True)
+        if not skirt:
+            box.prop(g, "tightness")
+        box.prop(g, "offset", text="Waist Gap" if skirt else "Offset")
+        if not skirt:
+            box.prop(g, "looseness", slider=True)
         box.prop(g, "thickness")
-        box.prop(g, "border_smooth", slider=True)
-        box.prop(g, "resolution")
+        if not skirt:
+            box.prop(g, "border_smooth", slider=True)
+            box.prop(g, "resolution")
+
+        box = col.box().column()
+        box.label(text="Simulate")
+        box.row().prop(g, "sim_preset", expand=True)
+        box.prop(g, "sim_animation")
+        box.operator("drape.simulate", icon='MOD_CLOTH')
+        cloth = garment.modifiers.get(CLOTH_MODIFIER)
+        if cloth is not None:
+            keys = garment.data.shape_keys
+            if keys is not None and keys.key_blocks.get(DRAPE_KEY) is not None:
+                box.label(text="Drape kept", icon='CHECKMARK')
+            row = box.row(align=True)
+            row.operator("drape.release_drape", icon='LOOP_BACK')
+            row.operator("drape.remove_cloth", text="", icon='X')
 
         box = col.box().column()
         box.label(text="Look")

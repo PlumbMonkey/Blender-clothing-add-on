@@ -7,8 +7,11 @@ from bpy.props import (
 )
 
 from .core.body_regions import REGIONS
-from .core.coverage import TEMPLATES, CoverageParams, compute_coverage, write_coverage
+from .core.coverage import (
+    TEMPLATES, TIGHTNESS_FIT, CoverageParams, compute_coverage, write_coverage,
+)
 from .core.fabric import STYLES, apply_fabric
+from .core.sim import PRESETS as SIM_PRESETS
 from .core import garment as garment_core
 from .core.nodes import set_input
 
@@ -48,9 +51,28 @@ def _live(g):
     return g.is_garment and g.body is not None
 
 
+def rebuild_skirt(g):
+    """Rebuild a skirt's mesh from its sliders (drops any kept drape and
+    simulation, which no longer match the new shape)."""
+    from .core import skirt as skirt_core, sim
+    obj = g.id_data
+    arm = bpy.data.objects.get(g.armature_name)
+    sim.drop_drape(obj)
+    sim.free_bake(obj)
+    params = skirt_core.SkirtParams(length=g.skirt_length, flare=g.flare,
+                                    waist=g.waist_height, offset=g.offset)
+    verts, faces, pins = skirt_core.build_skirt(g.body, arm, params,
+                                                bpy.context.evaluated_depsgraph_get())
+    skirt_core.write_skirt_mesh(obj, verts, faces, pins)
+
+
 def rebuild_coverage(g):
-    """Rewrite a garment's coverage group from its template and lengths."""
+    """Rewrite a garment's coverage group (or a skirt's mesh) from its
+    template and lengths."""
     if not _live(g):
+        return
+    if g.template == 'SKIRT':
+        rebuild_skirt(g)
         return
     arm = bpy.data.objects.get(g.armature_name)
     params = CoverageParams(
@@ -70,6 +92,9 @@ def _update_shell(self, context):
     if not _live(self):
         return
     obj = self.id_data
+    if self.template == 'SKIRT' and self.offset != obj.get("drape_built_offset"):
+        obj["drape_built_offset"] = self.offset
+        rebuild_skirt(self)
     mod = garment_core.shell_modifier(obj)
     if mod is not None:
         set_input(mod, "Offset", self.offset)
@@ -80,6 +105,20 @@ def _update_shell(self, context):
     if sol is not None:
         sol.thickness = self.thickness
     obj.update_tag()
+
+
+TIGHTNESS = (
+    ('SKIN', "Skin-tight", "Hugs every curve, like a leotard or compression wear"),
+    ('FITTED', "Fitted", "Close to the body but bridges small hollows"),
+    ('RELAXED', "Relaxed", "Everyday fit: smooths over the muscles"),
+    ('LOOSE', "Loose", "Baggy: stands off the body and bridges big hollows"),
+)
+
+
+def _update_tightness(self, context):
+    if not _live(self):
+        return
+    self.offset, self.looseness = TIGHTNESS_FIT[self.tightness]  # each fires _update_shell
 
 
 def _update_look(self, context):
@@ -110,11 +149,23 @@ class DrapeGarment(bpy.types.PropertyGroup):
     rise: FloatProperty(
         name="Rise", min=0.0, max=1.0, default=0.0, update=_update_coverage,
         description="How far the waistband comes up the torso")
+    skirt_length: FloatProperty(
+        name="Length", min=0.1, max=2.0, default=0.7, update=_update_coverage,
+        description="Hem: 0 at the hip joint, 1 knee, 2 ankle")
+    flare: FloatProperty(
+        name="Flare", min=0.0, max=1.5, default=0.35, update=_update_coverage,
+        description="How much the skirt widens as it goes down (0 = pencil skirt)")
+    waist_height: FloatProperty(
+        name="Waist", min=0.0, max=0.8, default=0.2, update=_update_coverage,
+        description="Waistband: 0 at the top of the hips, higher numbers sit lower")
     sock_height: FloatProperty(
         name="Sock Height", min=0.0, max=1.0, default=0.35, update=_update_coverage,
         description="0 at the ankle, 1 at the knee")
 
     # fit (modifier inputs)
+    tightness: EnumProperty(
+        name="Fit", items=TIGHTNESS, default='RELAXED', update=_update_tightness,
+        description="Quick fit: sets Offset and Looseness together")
     offset: FloatProperty(
         name="Offset", min=0.0, max=0.1, default=0.006, step=0.05, precision=4,
         subtype='DISTANCE', unit='LENGTH', update=_update_shell,
@@ -132,6 +183,14 @@ class DrapeGarment(bpy.types.PropertyGroup):
     border_smooth: IntProperty(
         name="Edge Smoothing", min=0, max=30, default=4, update=_update_shell,
         description="Rounds off the garment's edges (necklines, sleeve ends, hems)")
+
+    # simulation
+    sim_preset: EnumProperty(name="Cloth", items=SIM_PRESETS, default='DRAPE',
+                             description="Fabric and motion for the cloth simulation")
+    sim_animation: BoolProperty(
+        name="Whole Animation", default=False,
+        description="Simulate over the scene's frame range (for animated characters) "
+                    "instead of a short settle")
 
     # look
     style: EnumProperty(name="Style", items=STYLES, default='PBR', update=_update_look)

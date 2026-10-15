@@ -35,6 +35,7 @@ TEMPLATES = {
     'SHORTS': "Shorts",
     'PANTS': "Pants",
     'SOCKS': "Socks",
+    'SKIRT': "Skirt",
 }
 
 # Coverage fades from 1 to 0 over this distance (metres) across the garment's
@@ -54,14 +55,24 @@ TEMPLATE_DEFAULTS = {
     'SOCKS': {'sock_height': 0.35},
 }
 
-# Fit and look each template starts with (offset/thickness in metres).
+# Fit presets: (offset m, looseness passes). Offset is the closest the cloth
+# gets to the skin; looseness is how much it bridges hollows.
+TIGHTNESS_FIT = {
+    'SKIN': (0.0015, 0),
+    'FITTED': (0.004, 8),
+    'RELAXED': (0.008, 20),
+    'LOOSE': (0.016, 45),
+}
+
+# Fit and look each template starts with (thickness in metres).
 TEMPLATE_FIT = {
-    'TSHIRT': {'offset': 0.008, 'thickness': 0.003, 'looseness': 15, 'color': (0.10, 0.25, 0.60)},
-    'TANK': {'offset': 0.007, 'thickness': 0.0025, 'looseness': 12, 'color': (0.85, 0.85, 0.82)},
-    'LONGSLEEVE': {'offset': 0.008, 'thickness': 0.003, 'looseness': 15, 'color': (0.55, 0.12, 0.12)},
-    'SHORTS': {'offset': 0.004, 'thickness': 0.003, 'looseness': 30, 'color': (0.12, 0.12, 0.14)},
-    'PANTS': {'offset': 0.004, 'thickness': 0.003, 'looseness': 30, 'color': (0.10, 0.16, 0.30)},
-    'SOCKS': {'offset': 0.0015, 'thickness': 0.0015, 'looseness': 3, 'color': (0.9, 0.9, 0.9)},
+    'TSHIRT': {'tightness': 'RELAXED', 'thickness': 0.003, 'color': (0.10, 0.25, 0.60)},
+    'TANK': {'tightness': 'FITTED', 'thickness': 0.0025, 'color': (0.85, 0.85, 0.82)},
+    'LONGSLEEVE': {'tightness': 'RELAXED', 'thickness': 0.003, 'color': (0.55, 0.12, 0.12)},
+    'SHORTS': {'tightness': 'RELAXED', 'thickness': 0.003, 'color': (0.12, 0.12, 0.14)},
+    'PANTS': {'tightness': 'RELAXED', 'thickness': 0.003, 'color': (0.10, 0.16, 0.30)},
+    'SOCKS': {'tightness': 'SKIN', 'thickness': 0.0015, 'color': (0.9, 0.9, 0.9)},
+    'SKIRT': {'tightness': 'RELAXED', 'thickness': 0.002, 'color': (0.55, 0.10, 0.18)},
 }
 
 # Which sliders matter for which template (the panel shows only these).
@@ -72,6 +83,7 @@ TEMPLATE_PARAMS = {
     'SHORTS': ('leg_length', 'rise'),
     'PANTS': ('leg_length', 'rise'),
     'SOCKS': ('sock_height',),
+    'SKIRT': ('skirt_length', 'flare', 'waist_height'),
 }
 
 # Each limb part is measured from its own joint to the next one down.
@@ -85,9 +97,8 @@ def coverage_group_name(name):
     return f"DRAPE_COV_{name}"
 
 
-def limb_segments(armature):
-    """{part: (start, end)} in world space (rest pose) for every limb part,
-    from the part's root bone head to the next part's root bone head."""
+def part_roots(armature):
+    """{part: bone} — the first bone of each body part (its joint)."""
     parts = classify_bones(armature)
     roots = {}
     for b in armature.data.bones:
@@ -96,6 +107,13 @@ def limb_segments(armature):
             continue
         if b.parent is None or parts.get(b.parent.name) != p:
             roots.setdefault(p, b)
+    return roots
+
+
+def limb_segments(armature):
+    """{part: (start, end)} in world space (rest pose) for every limb part,
+    from the part's root bone head to the next part's root bone head."""
+    roots = part_roots(armature)
     mw = armature.matrix_world
     segs = {}
     for part, bone in roots.items():

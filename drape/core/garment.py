@@ -22,7 +22,8 @@ import bpy
 from .nodes import new_geometry_group, set_input, get_input
 
 SHELL_GROUP = "Drape Garment Shell"
-SHELL_VERSION = 11
+SHELL_VERSION = 12
+PIN_ATTR = "Drape_Pin"  # garment vertex group the cloth pins with
 SNAP_MERGE = 0.001  # metres: joins vertices snapped onto the same edge point
 LOOSE_FADE = 0.04  # metres: looseness fades to nothing at the garment edges
 WELD_DISTANCE = 0.0001  # metres: joins duplicated seam vertices
@@ -93,6 +94,7 @@ def _build_shell_group():
         ("Border Smooth", 'NodeSocketInt'),
         ("Looseness", 'NodeSocketInt'),
         ("Material", 'NodeSocketMaterial'),
+        ("Pin", 'NodeSocketString'),
     ))
     ng["drape_version"] = SHELL_VERSION
     defaults = {"Offset": 0.004, "Resolution": 1, "Border Smooth": 4, "Looseness": 15}
@@ -328,8 +330,16 @@ def _build_shell_group():
     mat = _node(ng, "GeometryNodeSetMaterial", 2580, 200)
     _link(ng, shade.outputs["Geometry"], mat.inputs["Geometry"])
     _link(ng, gi.outputs["Material"], mat.inputs["Material"])
-    go.location = (2780, 200)
-    _link(ng, mat.outputs["Geometry"], go.inputs["Geometry"])
+    # cloth pins: copy the body's pin weights (named by the Pin input) into
+    # the garment's Drape_Pin vertex group
+    pin_in = _node(ng, "GeometryNodeInputNamedAttribute", 2580, -200, data_type='FLOAT')
+    _link(ng, gi.outputs["Pin"], pin_in.inputs["Name"])
+    pin = _node(ng, "GeometryNodeStoreNamedAttribute", 2780, 200, data_type='FLOAT', domain='POINT')
+    pin.inputs["Name"].default_value = PIN_ATTR
+    _link(ng, mat.outputs["Geometry"], pin.inputs["Geometry"])
+    _link(ng, pin_in.outputs["Attribute"], pin.inputs["Value"])
+    go.location = (2980, 200)
+    _link(ng, pin.outputs["Geometry"], go.inputs["Geometry"])
     return ng
 
 
@@ -352,6 +362,12 @@ def create_garment(body, name, coverage_group, material, collection,
     set_input(mod, "Border Smooth", border_smooth)
     set_input(mod, "Looseness", looseness)
 
+    add_thickness(obj, thickness)
+    return obj
+
+
+def add_thickness(obj, thickness):
+    """The cloth-thickness Solidify (always last in the stack)."""
     sol = obj.modifiers.new(THICKNESS_MODIFIER, 'SOLIDIFY')
     sol.thickness = thickness
     sol.offset = 1.0
@@ -359,7 +375,7 @@ def create_garment(body, name, coverage_group, material, collection,
     sol.thickness_clamp = 1.0
     sol.use_rim = True
     sol.use_quality_normals = True
-    return obj
+    return sol
 
 
 def upgrade_if_needed():
