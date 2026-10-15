@@ -15,11 +15,16 @@
 - [x] Installs and shows an empty "Drape" N-panel in 5.2 — verified headless in Blender 5.2.0 LTS with a throwaway profile (installs, enables, all core modules import, unregisters cleanly). Not yet eyeballed in the live UI
 - [x] Licence: GPL-3.0-or-later, matching Wisp and the Blender Extensions platform rule (switched from the repo's initial MIT on 2026-10-14)
 
-## Phase 1 — Body Setup
-- [ ] Import normalization: CC / VRoid / generic body detection (reuse from core)
-- [ ] Body region masks: torso, arms, legs, hips, feet (auto-guess + paint refine)
-- [ ] Surface-snapped curve drawing on the body (reuse from core)
-- [ ] **Done when:** a CC body and a VRoid body are each garment-ready in under a minute
+## Phase 1 — Body Setup ✅ *core done 2026-10-14 (v0.2.0)*
+- [x] Import normalization: CC / VRoid / generic body detection (`core/rig.py`) — **Set Up Body** finds armature, pipeline and body mesh from any selected part (jeans, hair, body)
+- [x] Body region masks (`core/body_regions.py`): main bones classified by name (CC, VRoid, Mixamo, Rigify keywords), every other bone (twist/share/finger/toe, VRoid `J_Sec_*`/`J_Adj_*`) inherits from its nearest classified ancestor — hierarchy beats the name for side (VRoid ships `J_Sec_R_TopsUpperLegBack_end_01` under the *left* thigh). Each vertex → part with the most skin weight (16 parts with L/R) → 8 exclusive regions: Head, Neck, Torso, Hips, Arms, Hands, Legs, Feet
+- [x] Storage: `drape_part` / `drape_region` int point attributes (authoritative) mirrored to `DRAPE_REGION_*` vertex groups; `Drape Regions` colour attribute + **Show Regions** toggle (Solid → Attribute)
+- [x] Paint refine: pick a region → Refine by Painting → Finish Painting. Painted-in verts move to the region; erased verts go to the next region by skin weight, or (if they only had weight there) to their neighbours' majority region. Every vertex stays in exactly one region
+- [x] **Done when** verified live in Blender 5.2.0: Nova (CC, 14 164 verts) and Wei Li (VRoid, 7 909) each set up in one click, < 0.1 s, zero unassigned verts, clean front/back splits
+- [ ] Surface-snapped curve drawing — moved to Phase 2 (boundary curves come from region/coverage edges first; free drawing only needed for necklines/hems later). Wisp's Phase 2 hasn't built it either
+- [ ] Panel draw verified by code against a stand-in layout, not yet clicked in the live UI
+- **Found:** VRoid exports bake the outfit into `Body` (Wei Li's T-shirt/shorts/shoes are body geometry, with `J_Sec_*Tops*` physics bones). Regions still split correctly, but Drape garments would sit over the baked clothes. Need a nude VRoid export (or a "strip baked outfit" step) before Phase 2 testing on VRoid
+- **Noted:** Wei Li's hips edge is jagged along the baked shirt hem — fine as an auto-guess; Phase 2 smooths coverage borders anyway
 
 ## Phase 2 — Garment Generation MVP  → *first shippable*
 The core trick: paint coverage → get a garment. Non-destructive throughout.
