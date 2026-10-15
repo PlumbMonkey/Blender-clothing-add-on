@@ -4,9 +4,9 @@
   Geometry Nodes copy of the evaluated body with a Collision modifier, so
   the character's own object is never modified.
 - Pins hold the garment where real clothes are held up: the waistband for
-  bottoms and skirts, the shoulders for tops. Shell garments get their pin
-  weights from a body vertex group (``DRAPE_PIN_<garment>``) that the shell
-  copies into the garment's ``Drape_Pin`` group; skirts carry their own.
+  bottoms and skirts, the shoulders for tops. A shell's mesh carries the
+  body's vertex groups, so its cloth pins with a body group
+  (``DRAPE_PIN_<garment>``); skirts carry their own ``Drape_Pin``.
 - Presets set the fabric and how long to simulate. Everything is in metres
   (garments sit in world units), which is what Blender's cloth is tuned for.
 """
@@ -140,11 +140,12 @@ def cloth_modifier(obj):
     return mod if mod is not None and mod.type == 'CLOTH' else None
 
 
-def ensure_cloth(obj, preset, after=None, quality=8):
+def ensure_cloth(obj, preset, after=None, quality=8, pin_group=PIN_GROUP):
     """Add (or retune) the garment's cloth modifier. It sits right after the
     modifier named ``after`` (the shell), else first — always before the
     thickness, which must be added to the simulated surface."""
-    ensure_vertex_group(obj, PIN_GROUP)
+    if pin_group == PIN_GROUP:
+        ensure_vertex_group(obj, PIN_GROUP)
     mod = cloth_modifier(obj)
     if mod is None:
         mod = obj.modifiers.new(CLOTH_MODIFIER, 'CLOTH')
@@ -162,7 +163,7 @@ def ensure_cloth(obj, preset, after=None, quality=8):
     st.shear_stiffness = shear
     st.bending_stiffness = bending
     st.air_damping = air
-    st.vertex_group_mass = PIN_GROUP
+    st.vertex_group_mass = pin_group
     st.pin_stiffness = 1.0
     cs = mod.collision_settings
     cs.collision_quality = 3

@@ -19,6 +19,9 @@ from .core.coverage import (
 from .core.garment import create_garment, add_thickness, shell_modifier
 from .core.nodes import set_input
 from .core import skirt as skirt_core, sim
+from .core.layers import DEFAULT_LAYER, sync_layers, lower_points
+from .core.trim import ensure_trim
+from .core import details as details_core
 from .core.fabric import make_fabric
 
 PIPELINE_LABELS = {'CC': "Character Creator", 'VROID': "VRoid", 'GENERIC': "Generic"}
@@ -147,10 +150,12 @@ class DRAPE_OT_finish_painting(bpy.types.Operator):
 # --- garments (Phase 2) -------------------------------------------------------
 
 def active_garment(context):
-    """The garment the panel is about: the one being painted, else the active object."""
+    """The garment the panel is about: the one being painted or drawn on,
+    else the active object."""
     s = context.scene.drape
-    if s.painting_garment is not None and s.painting_garment.drape_garment.is_garment:
-        return s.painting_garment
+    for busy in (s.painting_garment, s.drawing_on):
+        if busy is not None and busy.drape_garment.is_garment:
+            return busy
     obj = context.active_object
     if obj is not None and obj.drape_garment.is_garment:
         return obj
@@ -220,7 +225,10 @@ class DRAPE_OT_add_garment(bpy.types.Operator):
         g.tightness = fit['tightness']
         g.offset, g.thickness, g.looseness = offset, fit['thickness'], looseness
         g.color = fit['color']
+        g.layer = DEFAULT_LAYER[template]
         g.is_garment = True
+        sync_layers(body)
+        ensure_trim(obj)
 
         _select_only(context, obj)
         self.report({'INFO'}, f"Added {TEMPLATES[template]} ({n} body verts covered)")
@@ -237,24 +245,27 @@ class DRAPE_OT_add_garment(bpy.types.Operator):
         fit = TEMPLATE_FIT['SKIRT']
         offset = TIGHTNESS_FIT[fit['tightness']][0]
         params = skirt_core.SkirtParams(offset=offset)
-        try:
-            verts, faces, pins = skirt_core.build_skirt(body, arm, params, context.evaluated_depsgraph_get())
-        except RuntimeError as e:
-            self.report({'ERROR'}, str(e))
-            return {'CANCELLED'}
-
         name = _unique_name(body, 'SKIRT')
         collection = body.users_collection[0] if body.users_collection else context.scene.collection
         obj = bpy.data.objects.new(name, bpy.data.meshes.new(name))
         collection.objects.link(obj)
+        g = obj.drape_garment
+        g.body = body  # needed to find the garments it goes over
+        g.layer = DEFAULT_LAYER['SKIRT']
+        dg = context.evaluated_depsgraph_get()
+        try:
+            verts, faces, pins = skirt_core.build_skirt(body, arm, params, dg,
+                                                        under=lower_points(obj, dg))
+        except RuntimeError as e:
+            bpy.data.objects.remove(obj)
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
         skirt_core.parent_to_bone(obj, arm, bone)
         skirt_core.write_skirt_mesh(obj, verts, faces, pins)
         obj.data.materials.append(make_fabric(name, fit['color']))
         add_thickness(obj, fit['thickness'])
         obj["drape_built_offset"] = offset
 
-        g = obj.drape_garment
-        g.body = body
         g.armature_name = arm.name
         g.template = 'SKIRT'
         g.skirt_length, g.flare, g.waist_height = params.length, params.flare, params.waist
@@ -262,6 +273,8 @@ class DRAPE_OT_add_garment(bpy.types.Operator):
         g.offset, g.thickness = offset, fit['thickness']
         g.color = fit['color']
         g.is_garment = True
+        sync_layers(body)
+        ensure_trim(obj)
 
         _select_only(context, obj)
         self.report({'INFO'}, "Added Skirt: click Drape to let it fall")
@@ -304,13 +317,13 @@ class DRAPE_OT_simulate(bpy.types.Operator):
         sim.drop_drape(garment)
 
         shell = shell_modifier(garment)
-        if shell is not None:  # body shell: pins come from the body
+        pins = sim.PIN_GROUP
+        if shell is not None:  # body shell: its mesh carries the body's pin group
             pins = sim.pin_group_name(garment.name)
             sim.write_shell_pins(g.body, garment.name, g.template, g.coverage_group)
-            set_input(shell, "Pin", pins)
         # body shells carry ~10x a skirt's vertices: trade a little accuracy for speed
         mod = sim.ensure_cloth(garment, g.sim_preset, after=shell.name if shell else None,
-                               quality=5 if shell else 8)
+                               quality=5 if shell else 8, pin_group=pins)
         _update_wind(g.body)
         scene = context.scene
         if g.sim_animation:
@@ -361,9 +374,6 @@ class DRAPE_OT_remove_cloth(bpy.types.Operator):
     def execute(self, context):
         garment = active_garment(context)
         sim.remove_cloth(garment)
-        shell = shell_modifier(garment)
-        if shell is not None:
-            set_input(shell, "Pin", "")
         _update_wind(garment.drape_garment.body)
         return {'FINISHED'}
 
@@ -425,6 +435,68 @@ class DRAPE_OT_reset_coverage(bpy.types.Operator):
         return {'FINISHED'}
 
 
+# --- drawn details (Phase 4) ------------------------------------------------------
+
+class DRAPE_OT_draw_detail(bpy.types.Operator):
+    """Draw a strap, belt, piping or zip straight onto this garment: draw
+    strokes on the cloth, then click Finish Drawing"""
+    bl_idname = "drape.draw_detail"
+    bl_label = "Draw Detail"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return active_garment(context) is not None and context.space_data is not None             and context.space_data.type == 'VIEW_3D'
+
+    def execute(self, context):
+        garment = active_garment(context)
+        s = context.scene.drape
+        if context.active_object and context.active_object.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        obj = details_core.create_detail(garment, s.detail_kind)
+        s.drawing_detail = obj
+        s.drawing_on = garment
+        _select_only(context, obj)
+        bpy.ops.object.mode_set(mode='EDIT')
+        paint = context.scene.tool_settings.curve_paint_settings
+        paint.depth_mode = 'SURFACE'
+        paint.surface_offset = 0.0
+        paint.curve_type = 'POLY'
+        bpy.ops.wm.tool_set_by_id(name="builtin.draw")
+        self.report({'INFO'}, f"Draw the {s.detail_kind.lower()} on the garment, then click Finish Drawing")
+        return {'FINISHED'}
+
+
+class DRAPE_OT_finish_detail(bpy.types.Operator):
+    """Stop drawing and attach the detail to the bone nearest it, so it
+    follows the character"""
+    bl_idname = "drape.finish_detail"
+    bl_label = "Finish Drawing"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.drape.drawing_detail is not None
+
+    def execute(self, context):
+        s = context.scene.drape
+        obj, garment = s.drawing_detail, s.drawing_on
+        if context.active_object and context.active_object.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        s.drawing_detail = None
+        s.drawing_on = None
+        bpy.ops.wm.tool_set_by_id(name="builtin.select_box")
+        if not obj.data.splines:
+            bpy.data.objects.remove(obj)
+            self.report({'WARNING'}, "Nothing was drawn")
+            return {'CANCELLED'}
+        arm = bpy.data.objects.get(garment.drape_garment.armature_name) if garment else None
+        bone = details_core.attach_detail(obj, arm)
+        _select_only(context, garment or obj)
+        self.report({'INFO'}, f"Detail attached to {bone}" if bone else "Detail added")
+        return {'FINISHED'}
+
+
 CLASSES = (
     DRAPE_OT_setup_body,
     DRAPE_OT_show_regions,
@@ -437,4 +509,6 @@ CLASSES = (
     DRAPE_OT_simulate,
     DRAPE_OT_release_drape,
     DRAPE_OT_remove_cloth,
+    DRAPE_OT_draw_detail,
+    DRAPE_OT_finish_detail,
 )

@@ -57,8 +57,10 @@ def _joint_z(armature, part):
     return (armature.matrix_world @ bone.head_local).z
 
 
-def build_skirt(body, armature, params, depsgraph):
-    """(verts, faces, pin weights) of an A-line skirt in world space."""
+def build_skirt(body, armature, params, depsgraph, under=None):
+    """(verts, faces, pin weights) of an A-line skirt in world space.
+    ``under``: world points (N×3) of garments worn beneath, which the skirt
+    must clear as well as the body."""
     regions = _read_int_attr(body.data, REGION_ATTR)
     if regions is None:
         raise RuntimeError("Set Up Body first")
@@ -92,6 +94,11 @@ def build_skirt(body, armature, params, depsgraph):
     # (arms and hands excluded: they hang beside the hips in an A-pose)
     keep = ~np.isin(regions, [REGIONS.index(r) for r in ('ARMS', 'HANDS', 'HEAD', 'NECK')])
     pts = world[keep]
+    if under is not None and len(under):
+        # lower garments, minus their sleeves (anything out past the hips)
+        reach = np.hypot(hips[:, 0] - cx, hips[:, 1] - cy).max() * 1.6
+        near = np.hypot(under[:, 0] - cx, under[:, 1] - cy) < reach
+        pts = np.concatenate([pts, under[near]])
     ang = np.arctan2(pts[:, 1] - cy, pts[:, 0] - cx)
     rad = np.hypot(pts[:, 0] - cx, pts[:, 1] - cy)
     thetas = np.linspace(0.0, 2 * math.pi, _AROUND, endpoint=False)
@@ -125,7 +132,7 @@ def build_skirt(body, armature, params, depsgraph):
     for r in range(rows - 1):
         for k in range(_AROUND):
             a, b = r * _AROUND + k, r * _AROUND + (k + 1) % _AROUND
-            faces.append((a, b, b + _AROUND, a + _AROUND))
+            faces.append((a, a + _AROUND, b + _AROUND, b))  # normals face out
     pins = [1.0 if r < 2 else (0.5 if r == 2 else 0.0) for r in range(rows) for _ in range(_AROUND)]
     return verts, faces, pins
 

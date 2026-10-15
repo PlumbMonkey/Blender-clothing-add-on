@@ -9,7 +9,8 @@ The garment is its own mesh object at the world origin with two modifiers:
    coverage crosses 0.5 on each edge) and smooths that edge as a line,
    relaxes the surface (Looseness, fading out at the edges) so it bridges
    hollows like cloth, then pushes anything nearer the body than Offset
-   back out to it.
+   back out to it, and anything inside a lower-layer garment (the Under
+   collection) out past it.
 2. ``Drape Thickness`` (Solidify): gives the cloth its thickness, outward.
 
 Because the shell reads the live body, it follows the body's animation and
@@ -22,8 +23,9 @@ import bpy
 from .nodes import new_geometry_group, set_input, get_input
 
 SHELL_GROUP = "Drape Garment Shell"
-SHELL_VERSION = 12
-PIN_ATTR = "Drape_Pin"  # garment vertex group the cloth pins with
+SHELL_VERSION = 16
+LAYER_GAP = 0.006   # metres kept outside a lower layer's inner surface (its thickness + air)
+LAYER_REACH = 0.12  # metres from the skin to look for lower layers (baggy ones stand off 5 cm+)
 SNAP_MERGE = 0.001  # metres: joins vertices snapped onto the same edge point
 LOOSE_FADE = 0.04  # metres: looseness fades to nothing at the garment edges
 WELD_DISTANCE = 0.0001  # metres: joins duplicated seam vertices
@@ -94,7 +96,7 @@ def _build_shell_group():
         ("Border Smooth", 'NodeSocketInt'),
         ("Looseness", 'NodeSocketInt'),
         ("Material", 'NodeSocketMaterial'),
-        ("Pin", 'NodeSocketString'),
+        ("Under", 'NodeSocketCollection'),
     ))
     ng["drape_version"] = SHELL_VERSION
     defaults = {"Offset": 0.004, "Resolution": 1, "Border Smooth": 4, "Looseness": 15}
@@ -325,21 +327,52 @@ def _build_shell_group():
     _link(ng, loose.outputs["Geometry"], project.inputs["Geometry"])
     _link(ng, push.outputs["Vector"], project.inputs["Offset"])
 
-    shade = _node(ng, "GeometryNodeSetShadeSmooth", 2400, 200)
-    _link(ng, project.outputs["Geometry"], shade.inputs["Geometry"])
-    mat = _node(ng, "GeometryNodeSetMaterial", 2580, 200)
+    # layering: garments on lower layers (the Under collection) are hit by a
+    # short ray from the skin along its normal; anything nearer the skin
+    # than that hit + LAYER_GAP is pushed out past it
+    under = _node(ng, "GeometryNodeCollectionInfo", 1860, -900, transform_space='RELATIVE')
+    _link(ng, gi.outputs["Under"], under.inputs["Collection"])
+    under_mesh = _node(ng, "GeometryNodeRealizeInstances", 2040, -900)
+    _link(ng, under.outputs["Instances"], under_mesh.inputs["Geometry"])
+    lift = _node(ng, "ShaderNodeVectorMath", 1860, -1100, operation='SCALE')
+    _link(ng, unit.outputs["Vector"], lift.inputs[0])
+    lift.inputs["Scale"].default_value = 0.0005
+    from_skin = _node(ng, "ShaderNodeVectorMath", 2040, -1100, operation='ADD')
+    _link(ng, s_pos.outputs["Value"], from_skin.inputs[0])
+    _link(ng, lift.outputs["Vector"], from_skin.inputs[1])
+    ray = _node(ng, "GeometryNodeRaycast", 2220, -950)
+    _link(ng, under_mesh.outputs["Geometry"], ray.inputs["Target Geometry"])
+    _link(ng, from_skin.outputs["Vector"], ray.inputs["Source Position"])
+    _link(ng, unit.outputs["Vector"], ray.inputs["Ray Direction"])
+    ray.inputs["Ray Length"].default_value = LAYER_REACH
+    clear_at = _node(ng, "ShaderNodeMath", 2400, -950, operation='ADD')
+    _link(ng, ray.outputs["Hit Distance"], clear_at.inputs[0])
+    clear_at.inputs[1].default_value = LAYER_GAP
+    short2 = _node(ng, "ShaderNodeMath", 2580, -950, operation='SUBTRACT')
+    _link(ng, clear_at.outputs["Value"], short2.inputs[0])
+    _link(ng, dist.outputs["Value"], short2.inputs[1])
+    need2 = _node(ng, "ShaderNodeMath", 2760, -950, operation='MAXIMUM')
+    _link(ng, short2.outputs["Value"], need2.inputs[0])
+    need2.inputs[1].default_value = 0.0
+    push2 = _node(ng, "ShaderNodeVectorMath", 2940, -950, operation='SCALE')
+    _link(ng, unit.outputs["Vector"], push2.inputs[0])
+    _link(ng, need2.outputs["Value"], push2.inputs["Scale"])
+    over = _node(ng, "GeometryNodeSetPosition", 2400, 400)
+    _link(ng, project.outputs["Geometry"], over.inputs["Geometry"])
+    _link(ng, ray.outputs["Is Hit"], over.inputs["Selection"])
+    _link(ng, push2.outputs["Vector"], over.inputs["Offset"])
+
+    shade = _node(ng, "GeometryNodeSetShadeSmooth", 2600, 200)
+    _link(ng, over.outputs["Geometry"], shade.inputs["Geometry"])
+    mat = _node(ng, "GeometryNodeSetMaterial", 2780, 200)
     _link(ng, shade.outputs["Geometry"], mat.inputs["Geometry"])
     _link(ng, gi.outputs["Material"], mat.inputs["Material"])
-    # cloth pins: copy the body's pin weights (named by the Pin input) into
-    # the garment's Drape_Pin vertex group
-    pin_in = _node(ng, "GeometryNodeInputNamedAttribute", 2580, -200, data_type='FLOAT')
-    _link(ng, gi.outputs["Pin"], pin_in.inputs["Name"])
-    pin = _node(ng, "GeometryNodeStoreNamedAttribute", 2780, 200, data_type='FLOAT', domain='POINT')
-    pin.inputs["Name"].default_value = PIN_ATTR
-    _link(ng, mat.outputs["Geometry"], pin.inputs["Geometry"])
-    _link(ng, pin_in.outputs["Attribute"], pin.inputs["Value"])
-    go.location = (2980, 200)
-    _link(ng, pin.outputs["Geometry"], go.inputs["Geometry"])
+    # (vertex groups can't be created here: the output keeps the *body's*
+    # vertex groups, so cloth pins and the thickness's shell/rim marks use
+    # groups that live on the body — see sim.py and trim.py)
+    out = mat.outputs["Geometry"]
+    go.location = (3000, 200)
+    _link(ng, out, go.inputs["Geometry"])
     return ng
 
 
@@ -379,10 +412,16 @@ def add_thickness(obj, thickness):
 
 
 def upgrade_if_needed():
-    """Bring garments made by an older Drape onto the current shell group."""
+    """Bring garments made by an older Drape up to date: the current shell
+    group, and the current thickness settings."""
     ng = bpy.data.node_groups.get(SHELL_GROUP)
     if ng is not None and ng.get("drape_version") != SHELL_VERSION:
         shell_node_group()
+    for obj in bpy.data.objects:
+        sol = thickness_modifier(obj)
+        if sol is not None and (sol.use_even_offset or sol.thickness_clamp != 1.0):
+            sol.use_even_offset = False
+            sol.thickness_clamp = 1.0
 
 
 def shell_modifier(obj):

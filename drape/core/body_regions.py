@@ -236,7 +236,39 @@ def detect_regions(obj, armature):
     parts = [PART_INDEX[max(s, key=s.get)] if s else 0 for s in scores]
     regions = [REGION_INDEX[PART_REGION[PARTS[p]]] for p in parts]
     _write_int_attr(obj.data, PART_ATTR, parts)
+    write_seam_fields(obj, regions)
     return write_regions(obj, regions)
+
+
+SIDE_ATTR = "drape_side"      # < 0 front, > 0 back: its 0 line = side and shoulder seams
+CENTER_ATTR = "drape_center"  # < 0 / > 0 either side of the middle: front placket
+ARM_ATTR = "drape_arm"        # 1 on arms and hands: its 0.5 line = armhole seams
+
+
+def _write_float_attr(mesh, name, values):
+    attr = mesh.attributes.get(name)
+    if attr is not None and (attr.domain != 'POINT' or attr.data_type != 'FLOAT'):
+        mesh.attributes.remove(attr)
+        attr = None
+    if attr is None:
+        attr = mesh.attributes.new(name, 'FLOAT', 'POINT')
+    attr.data.foreach_set("value", values)
+
+
+def write_seam_fields(obj, regions):
+    """Fields whose 0 / 0.5 lines are where garments have seams. They ride
+    on the body mesh, so they follow it through the garment shells."""
+    mw = obj.matrix_world
+    world = [mw @ v.co for v in obj.data.vertices]
+    core = {REGION_INDEX['TORSO'], REGION_INDEX['HIPS']}
+    trunk = [world[i] for i, r in enumerate(regions) if r in core] or world
+    cx = sum(p.x for p in trunk) / len(trunk)
+    cy = sum(p.y for p in trunk) / len(trunk)
+    arm = {REGION_INDEX['ARMS'], REGION_INDEX['HANDS']}
+    # characters face -Y (CC, VRoid, Mixamo, Rigify all import that way)
+    _write_float_attr(obj.data, SIDE_ATTR, [p.y - cy for p in world])
+    _write_float_attr(obj.data, CENTER_ATTR, [p.x - cx for p in world])
+    _write_float_attr(obj.data, ARM_ATTR, [1.0 if r in arm else 0.0 for r in regions])
 
 
 def apply_painted_region(obj, armature, region, threshold=0.5):

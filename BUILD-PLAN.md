@@ -53,13 +53,18 @@ The core trick: paint coverage → get a garment. Non-destructive throughout.
 - [ ] Panel checked by code against a stand-in layout, not clicked in the live UI
 - **Hard-won:** an empty made with `bpy.data.objects.new(name, None)` has no force field (`obj.field` is None) — make wind with `bpy.ops.object.effector_add`; `ptcache.bake` needs a `point_cache` context override; Keep Drape marks the cache "outdated" (the shape key changes the mesh), which is expected
 
-## Phase 4 — Details & Tailoring
-Where garments stop looking like shells. (Reuses Wisp's instance-along-curve tech.)
+## Phase 4 — Details & Tailoring ✅ *core done 2026-10-14 (v0.5.0)*
+Where garments stop looking like shells.
 
-- [ ] Seams and hems: instanced trim geometry along boundary curves
-- [ ] Detail curves drawn on garment → pockets, straps, belts, zippers, buttons (instanced assets)
-- [ ] Layering: garment-over-garment offset handling (shirt under jacket without clipping)
-- [ ] Edge loops/thickness controls for stylized (anime) vs realistic silhouettes
+- [x] **Layering** (`core/layers.py`): every garment has a Layer (socks 1, bottoms 2, tops 3, skirt 4). A shell reads the lower garments of the same body through its own `Drape_Under_<garment>` collection (outside the scene, fake user) — shell v16 casts a ray from the skin along its normal and pushes the cloth out past any lower layer (`LAYER_GAP` 6 mm, `LAYER_REACH` 12 cm, enough for Loose garments). A skirt takes lower garments' points into its outline when built. Verified: Loose shorts swallowed a Fitted shirt's hem without layering; with it the hem sits over them
+- [x] **Trim** (`core/trim.py`, "Drape Trim" GN modifier, last in the stack): hems (outside faces next to the thickness rim), side/shoulder seams (`drape_side` 0 line) and armholes (`drape_arm` 0.5 line), smoothed as curves and swept into tubes; buttons spaced down the front middle (`drape_center` 0 line, front, not arms), seated 2.5 mm proud, off-white "Drape Buttons" material. Body fields written by Set Up Body
+- [x] **Silhouette** preset: Realistic (2.5 mm cloth, fine hems, seams, Fabric) / Anime (5 mm cloth, bold 3 mm hems, no seams, Toon)
+- [x] **Drawn details** (`core/details.py`, "Drape Detail" GN modifier on a curve): Strap, Belt, Piping, Zip (tape + metal teeth). Draw Detail → Draw tool on the cloth (surface depth) → Finish Drawing parents it to the nearest *main* bone (physics/twist/helper bones skipped). The modifier keeps the curve on the garment's current surface: moves only along the cloth normal (sliding to the nearest point dragged points to hems), flips normals that face inward (the nearest cloth can be the garment's inside), smooths position and normal along the curve
+- [x] **Done when** verified live: anime long-sleeve with 6 buttons over shorts on the VRoid; realistic T-shirt with seams and 5 buttons, a belt round Nova's shorts; a strap drawn through the real operators attached to the upper chest. Panel checked by code for shell, skirt and shorts garments
+- [ ] Pockets (patch pockets as stitched panels) — not built
+- [ ] Draw Detail is only tested with points added by script between the two operators, not with real mouse strokes in the Draw tool
+- [ ] Skirt seams: none (a skirt has no body fields); its hem trim works
+- **Hard-won:** (1) a GN modifier's output keeps the *source* mesh's vertex groups — a body shell carries the body's groups and **can't create new ones**, so Solidify's shell/rim marks and cloth pins must use groups that exist on the body (with a 0 weight on every vertex, or they vanish); (2) Solidify marks the *original* (inner) surface as "shell", not the outer copy; (3) skirt faces were wound inward (normals into the body) → flipped; (4) Remove Attribute's pattern mode is "Wildcard", not 'WILDCARD'; (5) Set Curve Normal's mode is an input socket ('Free'); (6) layering collections must stay out of the scene, so details must link to the garment's *scene* collection, not `users_collection[0]`; (7) garments made before a settings fix keep the old Solidify settings — `upgrade_if_needed` now corrects them on load
 
 ## Phase 5 — Materials & Style
 - [ ] Fabric preset library: cotton, denim, silk, knit, leather — PBR + toon variants

@@ -65,6 +65,9 @@ class DRAPE_PT_main(bpy.types.Panel):
         g = garment.drape_garment
         col.separator()
         col.label(text=garment.name, icon='MATCLOTH')
+        row = col.row(align=True)
+        row.prop(g, "layer")
+        row.prop(g, "silhouette", text="")
 
         box = col.box().column()
         box.label(text="Shape")
@@ -105,6 +108,26 @@ class DRAPE_PT_main(bpy.types.Panel):
             row = box.row(align=True)
             row.operator("drape.release_drape", icon='LOOP_BACK')
             row.operator("drape.remove_cloth", text="", icon='X')
+
+        box = col.box().column()
+        box.label(text="Trim")
+        box.prop(g, "hem")
+        if not skirt:
+            box.prop(g, "seams")
+        if g.template in ('TSHIRT', 'TANK', 'LONGSLEEVE'):
+            row = box.row(align=True)
+            row.prop(g, "buttons")
+            row.prop(g, "button_size", text="Size")
+
+        box = col.box().column()
+        box.label(text="Details")
+        s = context.scene.drape
+        if s.drawing_detail is not None:
+            box.operator("drape.finish_detail", icon='CHECKMARK')
+        else:
+            row = box.row(align=True)
+            row.prop(s, "detail_kind", text="")
+            row.operator("drape.draw_detail", text="Draw", icon='GREASEPENCIL')
 
         box = col.box().column()
         box.label(text="Look")

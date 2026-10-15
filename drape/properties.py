@@ -12,6 +12,7 @@ from .core.coverage import (
 )
 from .core.fabric import STYLES, apply_fabric
 from .core.sim import PRESETS as SIM_PRESETS
+from .core.details import KINDS as DETAIL_KINDS
 from .core import garment as garment_core
 from .core.nodes import set_input
 
@@ -43,6 +44,10 @@ class DrapeSettings(bpy.types.PropertyGroup):
         name="Painting", type=bpy.types.Object,
         description="Garment whose coverage is being painted",
     )
+    detail_kind: EnumProperty(name="Detail", items=DETAIL_KINDS, default='STRAP',
+                              description="What to draw on the garment")
+    drawing_detail: PointerProperty(name="Drawing", type=bpy.types.Object)
+    drawing_on: PointerProperty(name="Drawing On", type=bpy.types.Object)
 
 
 # --- per-garment live updates ------------------------------------------------
@@ -61,8 +66,10 @@ def rebuild_skirt(g):
     sim.free_bake(obj)
     params = skirt_core.SkirtParams(length=g.skirt_length, flare=g.flare,
                                     waist=g.waist_height, offset=g.offset)
-    verts, faces, pins = skirt_core.build_skirt(g.body, arm, params,
-                                                bpy.context.evaluated_depsgraph_get())
+    from .core.layers import lower_points
+    dg = bpy.context.evaluated_depsgraph_get()
+    verts, faces, pins = skirt_core.build_skirt(g.body, arm, params, dg,
+                                                under=lower_points(obj, dg))
     skirt_core.write_skirt_mesh(obj, verts, faces, pins)
 
 
@@ -121,6 +128,46 @@ def _update_tightness(self, context):
     self.offset, self.looseness = TIGHTNESS_FIT[self.tightness]  # each fires _update_shell
 
 
+def _update_layer(self, context):
+    if not _live(self):
+        return
+    from .core.layers import sync_layers
+    sync_layers(self.body)
+    if self.template == 'SKIRT':
+        rebuild_skirt(self)
+
+
+def _update_trim(self, context):
+    if not _live(self):
+        return
+    from .core.trim import trim_modifier
+    mod = trim_modifier(self.id_data)
+    if mod is not None:
+        set_input(mod, "Hem", self.hem)
+        set_input(mod, "Seams", self.seams)
+        set_input(mod, "Buttons", self.buttons)
+        set_input(mod, "Button Size", self.button_size)
+        self.id_data.update_tag()
+
+
+SILHOUETTES = (
+    ('REALISTIC', "Realistic", "Thin cloth, fine hems and stitched seams, soft fabric shading"),
+    ('ANIME', "Anime", "Thick, clean cloth with bold hems, no seams, and cel shading"),
+)
+# thickness m, hem m, seams m, look
+SILHOUETTE_LOOK = {
+    'REALISTIC': (0.0025, 0.0015, 0.001, 'PBR'),
+    'ANIME': (0.005, 0.003, 0.0, 'TOON'),
+}
+
+
+def _update_silhouette(self, context):
+    if not _live(self):
+        return
+    thickness, hem, seams, style = SILHOUETTE_LOOK[self.silhouette]
+    self.thickness, self.hem, self.seams, self.style = thickness, hem, seams, style
+
+
 def _update_look(self, context):
     if not _live(self):
         return
@@ -162,6 +209,12 @@ class DrapeGarment(bpy.types.PropertyGroup):
         name="Sock Height", min=0.0, max=1.0, default=0.35, update=_update_coverage,
         description="0 at the ankle, 1 at the knee")
 
+    # layering
+    layer: IntProperty(
+        name="Layer", min=1, max=6, default=3, update=_update_layer,
+        description="Higher layers are worn over lower ones (socks 1, bottoms 2, "
+                    "tops 3, skirts 4)")
+
     # fit (modifier inputs)
     tightness: EnumProperty(
         name="Fit", items=TIGHTNESS, default='RELAXED', update=_update_tightness,
@@ -191,6 +244,25 @@ class DrapeGarment(bpy.types.PropertyGroup):
         name="Whole Animation", default=False,
         description="Simulate over the scene's frame range (for animated characters) "
                     "instead of a short settle")
+
+    # trim
+    silhouette: EnumProperty(
+        name="Silhouette", items=SILHOUETTES, default='REALISTIC', update=_update_silhouette,
+        description="Quick style: sets thickness, hems, seams and shading together")
+    hem: FloatProperty(
+        name="Hems", min=0.0, max=0.01, default=0.0015, step=0.01, precision=4,
+        subtype='DISTANCE', unit='LENGTH', update=_update_trim,
+        description="Radius of the rolled edge along every hem, cuff and neckline (0 = none)")
+    seams: FloatProperty(
+        name="Seams", min=0.0, max=0.005, default=0.001, step=0.01, precision=4,
+        subtype='DISTANCE', unit='LENGTH', update=_update_trim,
+        description="Size of the side, shoulder and armhole seams (0 = none)")
+    buttons: IntProperty(
+        name="Buttons", min=0, max=12, default=0, update=_update_trim,
+        description="Buttons down the front (tops)")
+    button_size: FloatProperty(
+        name="Button Size", min=0.002, max=0.02, default=0.006, step=0.05, precision=4,
+        subtype='DISTANCE', unit='LENGTH', update=_update_trim)
 
     # look
     style: EnumProperty(name="Style", items=STYLES, default='PBR', update=_update_look)
